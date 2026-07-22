@@ -1,8 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import * as Updates from 'expo-updates';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useFavoritePlaces } from '../context/FavoritePlacesContext';
 import { useHomeAddress } from '../context/HomeAddressContext';
@@ -11,16 +10,8 @@ import { useThemeColors } from '../context/ThemeContext';
 import { useTranslation } from '../i18n/useTranslation';
 import { ensureNotificationSetup } from '../services/notifications';
 import { hasApiKey } from '../services/atClient';
-import { getFeedInfo, GtfsFeedInfo } from '../services/gtfsStatic';
 import { radius, spacing, ThemeColors } from '../theme';
 import { Language, RootStackParamList, ThemeMode, TransportMode } from '../types';
-
-const FEED_WARNING_DAYS = 30;
-
-function formatYmd(ymd: string): string {
-  if (ymd.length !== 8) return ymd;
-  return `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}`;
-}
 
 const MODE_FILTERS: { key: TransportMode; labelKey: 'mode.bus' | 'mode.train' | 'mode.ferry' }[] = [
   { key: 'bus', labelKey: 'mode.bus' },
@@ -57,15 +48,7 @@ export default function SettingsScreen() {
   } = useSettings();
   const { places: favoritePlaces } = useFavoritePlaces();
   const { homeAddress, setHomeAddress } = useHomeAddress();
-  const [feedInfo, setFeedInfo] = useState<GtfsFeedInfo | null>(null);
-  const [feedError, setFeedError] = useState('');
   const t = useTranslation();
-
-  useEffect(() => {
-    getFeedInfo()
-      .then(setFeedInfo)
-      .catch((err) => setFeedError(err instanceof Error ? err.message : String(err)));
-  }, []);
 
   async function handleMasterToggle(value: boolean) {
     if (value) {
@@ -203,42 +186,6 @@ export default function SettingsScreen() {
         )}
       </View>
 
-      <Text style={styles.sectionTitle}>{t('about.timetableData')}</Text>
-      <View style={styles.section}>
-        {feedInfo ? (
-          <>
-            <Text style={styles.rowHint}>
-              {t('about.validRange', { start: formatYmd(feedInfo.startDate), end: formatYmd(feedInfo.endDate) })}
-            </Text>
-            <Text style={styles.rowHint}>{t('about.feedVersion', { version: feedInfo.version || 'n/a' })}</Text>
-            {feedInfo.daysUntilExpiry < 0 ? (
-              <Text style={styles.warning}>{t('about.expired', { days: Math.abs(feedInfo.daysUntilExpiry) })}</Text>
-            ) : feedInfo.daysUntilExpiry <= FEED_WARNING_DAYS ? (
-              <Text style={styles.warning}>{t('about.expiring', { days: feedInfo.daysUntilExpiry })}</Text>
-            ) : (
-              <Text style={styles.ok}>{t('about.upToDate', { days: feedInfo.daysUntilExpiry })}</Text>
-            )}
-          </>
-        ) : (
-          <Text style={styles.rowHint}>{feedError ? t('about.error', { message: feedError }) : t('app.loading')}</Text>
-        )}
-      </View>
-
-      <Text style={styles.sectionTitle}>{t('about.buildUpdate')}</Text>
-      <View style={styles.section}>
-        <Text style={styles.rowHint}>{t('about.runtime', { value: Updates.runtimeVersion ?? 'n/a' })}</Text>
-        <Text style={styles.rowHint}>{t('about.channel', { value: Updates.channel ?? 'n/a' })}</Text>
-        <Text style={styles.rowHint}>
-          {t('about.running', {
-            value: Updates.isEmbeddedLaunch ? t('about.runningBuiltIn') : t('about.runningDownloaded'),
-          })}
-        </Text>
-        <Text style={styles.rowHint}>{t('about.updateId', { value: Updates.updateId ?? 'n/a' })}</Text>
-        <Text style={styles.rowHint}>
-          {t('about.published', { value: Updates.createdAt ? Updates.createdAt.toLocaleString() : 'n/a' })}
-        </Text>
-      </View>
-
       <Text style={styles.apiStatus}>{hasApiKey() ? t('settings.apiConnected') : t('settings.apiNotConnected')}</Text>
     </ScrollView>
   );
@@ -305,7 +252,5 @@ function createStyles(colors: ThemeColors) {
       fontSize: 12,
       padding: spacing.lg,
     },
-    ok: { fontSize: 12, color: colors.success, marginTop: 2 },
-    warning: { fontSize: 12, color: colors.danger, marginTop: 2 },
   });
 }
