@@ -2,7 +2,7 @@
 
 A personal, from-scratch alternative to Auckland Transport's official app — live vehicle tracking, journey planning with real-time GPS step tracking, background-surviving trip notifications, and an offline-first schedule database, built solo with Expo/React Native + TypeScript.
 
-Built against Auckland Transport's public GTFS + GTFS-Realtime APIs and Google's Routes/Places APIs. Android/iOS only — no web build.
+Built against Auckland Transport's public GTFS + GTFS-Realtime APIs and Google's Routes/Places APIs. Mobile only, no web build — built and tested on Android; iOS is configured but untested (see Known limitations).
 
 ## Why I built this
 
@@ -46,6 +46,7 @@ A few problems that took real digging to solve properly, condensed here — the 
 ## Known limitations
 
 - **Mobile only** — no web build; `react-native-maps` doesn't support it, and it was never a goal.
+- **Built and tested on Android only** — the app is configured for iOS too (bundle identifier, permissions, plugins are all in `app.config.js`), but a real iOS build requires a paid Apple Developer Program membership to install on a physical device, which this project hasn't set up. Untested on iOS as a result.
 - **Some routes never show a highlighted path on the map** — this is a gap in what AT publishes (route shape data is optional per the GTFS spec, and not every route includes it), not a bug in the lookup logic. Explained in-app on the About screen.
 - **Fare estimates are approximate**, not official pricing — see above.
 - **The bundled schedule database goes stale** after a few months (AT's static feed is versioned) and needs a fresh download + rebuild; the app surfaces a staleness warning on the About screen so this isn't a silent failure.
