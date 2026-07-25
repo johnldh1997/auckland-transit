@@ -4,6 +4,14 @@ A personal, from-scratch alternative to Auckland Transport's official app — li
 
 Built against Auckland Transport's public GTFS + GTFS-Realtime APIs and Google's Routes/Places APIs. Mobile only, no web build — built and tested on Android; iOS is configured but untested (see Known limitations).
 
+## Screenshots
+
+<p float="left">
+  <img src="images/journey-planner.jpg" width="32%" alt="Journey planner with live bus stops shown on the map" />
+  <img src="images/route-options.jpg" width="32%" alt="Route options with travel times, transfers, and walking distance" />
+  <img src="images/route-preview.jpg" width="32%" alt="Turn-by-turn route preview with an estimated AT HOP fare" />
+</p>
+
 ## Why I built this
 
 The official app buries notification settings behind several taps and sends recurring alerts that are hard to fully turn off, and its stop map doesn't make it obvious which side of the road a stop actually sits on. I wanted something opt-in by default, with exact stop locations, and — since I was building it myself — the freedom to add features I actually wanted (like live GPS tracking during a journey, and a lock-screen notification that tells you when to get off).
