@@ -15,6 +15,7 @@ import { useTranslation } from '../i18n/useTranslation';
 import { darkMapStyle, lightMapStyle, MY_LOCATION_ZOOM_DELTA } from '../mapStyle';
 import { spacing } from '../theme';
 import { Stop, TransportMode, VehiclePosition } from '../types';
+import HeadingArrowBadge, { bearingBucket } from './HeadingArrowBadge';
 import LocateButton from './LocateButton';
 import StableMarker from './StableMarker';
 import { createStyles } from './VehicleMap.styles';
@@ -46,6 +47,11 @@ const DEFAULT_REGION: Region = {
 };
 
 const LOCATION_TIMEOUT_MS = 5_000;
+
+// Size and corner radius of a vehicle's badge — must match styles.dot in VehicleMap.styles.ts
+// (which is fixed at exactly this size) so HeadingArrowBadge can keep its heading arrowhead a
+// steady distance from the badge's edge at every angle.
+const VEHICLE_BADGE = { width: 40, height: 38, radius: 8 };
 
 // The bus-icon bitmap (see markerIcon.ts) is a plain square glyph, not a teardrop pin — the
 // native default anchor (bottom-center, correct for a pin whose tip touches the ground) would
@@ -487,14 +493,20 @@ export default function VehicleMap({ onStopPress, bottomInset = 0, onSelectedVeh
           <StableMarker
             key={v.vehicleId}
             coordinate={{ latitude: v.lat, longitude: v.lon }}
+            // Centered (not the default bottom-center) so the heading arrow orbits the
+            // vehicle's true position rather than a point above it.
+            anchor={CENTER_ANCHOR}
+            snapshotKey={bearingBucket(v.bearing)}
             onPress={() => handleVehiclePress(v)}
           >
-            <View style={[styles.dot, { backgroundColor: modeColor[v.mode] }]}>
-              <MaterialIcons name={MODE_ICON[v.mode]} size={14} color="#FFFFFF" />
-              <Text style={styles.dotText} numberOfLines={1}>
-                {v.routeShortName ?? '?'}
-              </Text>
-            </View>
+            <HeadingArrowBadge bearing={v.bearing} arrowColor={modeColor[v.mode]} badge={VEHICLE_BADGE}>
+              <View style={[styles.dot, { backgroundColor: modeColor[v.mode] }]}>
+                <MaterialIcons name={MODE_ICON[v.mode]} size={14} color="#FFFFFF" />
+                <Text style={styles.dotText} numberOfLines={1}>
+                  {v.routeShortName ?? '?'}
+                </Text>
+              </View>
+            </HeadingArrowBadge>
           </StableMarker>
         ))}
       </MapView>

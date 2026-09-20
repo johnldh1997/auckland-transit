@@ -5,8 +5,12 @@ import * as TaskManager from 'expo-task-manager';
 import { Platform, Vibration } from 'react-native';
 import { loadActiveJourney } from './activeJourney';
 import { STORAGE_KEY as SETTINGS_STORAGE_KEY } from '../context/SettingsContext';
+import { TranslationKey } from '../i18n/translations';
 import { translate } from '../i18n/useTranslation';
+import { AlightStage, ON_LEG_MAX_METERS, stageFromDistance, stageFromProgress, stageFromSchedule } from './alightStage';
+import { decodePolyline } from './directions';
 import { getCurrentStepIndex } from './journeyTracking';
+import { arcPositionMeters, computeLegProgress, LatLon } from './legProgress';
 import { getVehiclesForRoutes } from './liveVehicleMatch';
 import { getNextStopForTrip } from './realtime';
 import { getStopsAlongLeg } from './routeStops';
@@ -146,12 +150,28 @@ function buildContent(steps: TransitStep[], now: Date, position: { latitude: num
 // (not reusing NOTIFICATION_ID) so it isn't silently overwritten by the next routine
 // ongoing-status update, plus a device vibration since this is the one moment in the
 // journey worth physically getting the user's attention for.
-async function fireEventAlert(step: TransitStep, kind: 'board' | 'alight'): Promise<void> {
-  Vibration.vibrate(kind === 'alight' ? [0, 400, 200, 400] : [0, 400]);
+type AlertKind = 'board' | 'alight-next' | 'alight-now';
+
+const ALERT_TEXT: Record<AlertKind, { title: TranslationKey; body: TranslationKey; vibration: number[] }> = {
+  board: { title: 'journey.alertBoardTitle', body: 'journey.alertBoardBody', vibration: [0, 400] },
+  'alight-next': { title: 'journey.alertAlightTitle', body: 'journey.alertAlightBody', vibration: [0, 400, 200, 400] },
+  // Longer than the heads-up above — by now the rider has a matter of seconds.
+  'alight-now': {
+    title: 'journey.alertAlightNowTitle',
+    body: 'journey.alertAlightNowBody',
+    vibration: [0, 600, 200, 600, 200, 600],
+  },
+};
+
+async function fireEventAlert(step: TransitStep, kind: AlertKind): Promise<void> {
+  const text = ALERT_TEXT[kind];
+  Vibration.vibrate(text.vibration);
   const language = await readLanguage();
-  const title = translate(language, kind === 'alight' ? 'journey.alertAlightTitle' : 'journey.alertBoardTitle');
-  const body = translate(language, kind === 'alight' ? 'journey.alertAlightBody' : 'journey.alertBoardBody', {
+  const title = translate(language, text.title);
+  const body = translate(language, text.body, {
     line: step.lineName ?? '?',
+    // Named so the rider can check it against the stop sign, not just trust a timer.
+    stop: step.arrivalStop?.name ?? translate(language, 'journey.yourStop'),
   });
   await Notifications.scheduleNotificationAsync({
     content: { title, body, priority: Notifications.AndroidNotificationPriority.HIGH, sound: 'default' },
@@ -159,15 +179,64 @@ async function fireEventAlert(step: TransitStep, kind: 'board' | 'alight'): Prom
   });
 }
 
-// "Next stop is where you get off" — fires once, schedule-driven off the same
-// arrivalTimestamp the step list already shows, the moment we're both actually riding this
-// leg (GPS/schedule-matched as the current step) and close to its scheduled arrival.
-function findAlightingEvent(steps: TransitStep[], currentIndex: number, now: Date): number | null {
+// --- Get-off Alert (stop-based, GPS with schedule fallback) ---
+// The decision rules live in alightStage.ts; this gathers their inputs and fires the alerts.
+
+// A GPS fix older than this counts as "no signal" — underground (the City Rail Link's stations)
+// or in a long tunnel, where no new fixes arrive at all — and the cue falls back to the
+// scheduled arrival, since a stale position says nothing about where the vehicle is now.
+const GPS_FRESH_MS = 90_000;
+
+function haversineMeters(a: LatLon, b: LatLon): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.latitude - a.latitude);
+  const dLon = toRad(b.longitude - a.longitude);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.latitude)) * Math.cos(toRad(b.latitude)) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+async function alightStageByPosition(step: TransitStep, position: LatLon): Promise<AlightStage | null> {
+  const legPoints = step.encodedPolyline ? decodePolyline(step.encodedPolyline) : [];
+  const stops = await getStopsAlongLeg(step);
+
+  const progress = legPoints.length > 1 && stops.length >= 2 ? computeLegProgress(legPoints, stops, position) : null;
+  if (progress) return stageFromProgress(progress, stops.length);
+
+  if (!step.arrivalStop) return null;
+  if (legPoints.length > 1 && arcPositionMeters(legPoints, position).offRouteMeters > ON_LEG_MAX_METERS) return null;
+  return stageFromDistance(
+    haversineMeters(position, { latitude: step.arrivalStop.lat, longitude: step.arrivalStop.lon })
+  );
+}
+
+async function findAlightingStage(
+  steps: TransitStep[],
+  currentIndex: number,
+  now: Date,
+  position: LatLon | undefined,
+  positionAgeMs: number
+): Promise<AlightStage | null> {
   const step = steps[currentIndex];
-  if (!step || step.kind !== 'transit' || !step.arrivalTimestamp) return null;
-  const minutesToArrival = (new Date(step.arrivalTimestamp).getTime() - now.getTime()) / 60_000;
-  if (minutesToArrival <= PRE_EVENT_MINUTES && minutesToArrival >= -POST_EVENT_MINUTES) return currentIndex;
-  return null;
+  if (!step || step.kind !== 'transit') return null;
+  if (position && positionAgeMs <= GPS_FRESH_MS) return alightStageByPosition(step, position);
+  return stageFromSchedule(step.arrivalTimestamp, now);
+}
+
+// Each cue fires at most once per leg. A 'now' also retires its 'next' — if the heads-up was
+// missed (sparse fixes jumped straight to the stop), it must not fire after the arrival cue.
+async function fireAlightingAlert(steps: TransitStep[], index: number, stage: AlightStage): Promise<void> {
+  const nextKey = `alight-next-${index}`;
+  const nowKey = `alight-now-${index}`;
+  if (stage === 'next') {
+    if ((await hasAlerted(nextKey)) || (await hasAlerted(nowKey))) return;
+    await markAlerted(nextKey);
+    await fireEventAlert(steps[index], 'alight-next');
+    return;
+  }
+  if (await hasAlerted(nowKey)) return;
+  await markAlerted(nowKey);
+  await markAlerted(nextKey);
+  await fireEventAlert(steps[index], 'alight-now');
 }
 
 // "The bus you have to get on arrived at the previous stop" — unlike the schedule-based
@@ -205,21 +274,36 @@ async function findBoardingArrival(steps: TransitStep[], now: Date): Promise<num
 // keeps updating with the screen off/app backgrounded, when background location permission
 // was granted). Outside the boarding/alighting window this dismisses instead of posting, so
 // it isn't sitting there permanently alongside the OS's own foreground-service notification.
+//
+// positionAgeMs is how old `position` is — the foreground watch passes a fresh fix (0), but the
+// periodic re-check and the background task can be holding an old one, which the get-off cue
+// must not treat as the vehicle's current location (see GPS_FRESH_MS).
+//
+// Overlapping runs are skipped rather than queued: the foreground GPS watch and the background
+// task can both call this at once, and two runs racing through the "already alerted?" check
+// before either records it would fire the same alert twice. The next fix is seconds away.
+let updateInFlight = false;
+
 export async function updateJourneyNotification(
   steps: TransitStep[],
-  position?: { latitude: number; longitude: number }
+  position?: LatLon,
+  positionAgeMs = 0
 ): Promise<void> {
+  if (updateInFlight) return;
+  updateInFlight = true;
+  try {
+    await runJourneyNotificationUpdate(steps, position, positionAgeMs);
+  } finally {
+    updateInFlight = false;
+  }
+}
+
+async function runJourneyNotificationUpdate(steps: TransitStep[], position: LatLon | undefined, positionAgeMs: number): Promise<void> {
   const now = new Date();
   const currentIndex = getCurrentStepIndex(steps, now, position);
 
-  const alightIndex = findAlightingEvent(steps, currentIndex, now);
-  if (alightIndex !== null) {
-    const key = `alight-${alightIndex}`;
-    if (!(await hasAlerted(key))) {
-      await markAlerted(key);
-      await fireEventAlert(steps[alightIndex], 'alight');
-    }
-  }
+  const alightStage = await findAlightingStage(steps, currentIndex, now, position, positionAgeMs);
+  if (alightStage) await fireAlightingAlert(steps, currentIndex, alightStage);
 
   const boardIndex = await findBoardingArrival(steps, now);
   if (boardIndex !== null) {
@@ -252,7 +336,11 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
   if (!latest) return;
   const active = await loadActiveJourney();
   if (!active) return;
-  await updateJourneyNotification(active.route.steps, { latitude: latest.coords.latitude, longitude: latest.coords.longitude });
+  await updateJourneyNotification(
+    active.route.steps,
+    { latitude: latest.coords.latitude, longitude: latest.coords.longitude },
+    Date.now() - latest.timestamp
+  );
 });
 
 // Posts the initial notification and — best-effort — starts background location delivery
@@ -279,10 +367,13 @@ export async function startJourneyTracking(steps: TransitStep[]): Promise<void> 
   if (alreadyStarted) return;
 
   const language = await readLanguage();
+  // High (not Balanced) accuracy: the get-off alert decides which stop the rider is at, which
+  // needs a real GPS fix — Balanced can be a ~100m cell/wifi estimate, wider than the gap
+  // between some stops. Only runs for the duration of an active journey.
   await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
-    accuracy: Location.Accuracy.Balanced,
-    timeInterval: 20_000,
-    distanceInterval: 25,
+    accuracy: Location.Accuracy.High,
+    timeInterval: 10_000,
+    distanceInterval: 20,
     showsBackgroundLocationIndicator: true,
     foregroundService: {
       notificationTitle: translate(language, 'home.title'),

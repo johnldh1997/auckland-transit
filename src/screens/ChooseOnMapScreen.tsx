@@ -92,12 +92,16 @@ export default function ChooseOnMapScreen({ navigation, route }: Props) {
     }
 
     // Carry the full from+to pair back (not just the field being picked), so the other
-    // field's in-progress selection isn't lost on the way back to Home's inline journey form
-    // (the only place a 'journey' picker is ever opened from).
-    navigation.navigate('Home', {
-      restoredFrom: params.pickingFor === 'from' ? endpoint : params.currentFrom,
-      restoredTo: params.pickingFor === 'to' ? endpoint : params.currentTo,
-    });
+    // field's in-progress selection isn't lost on the way back to whichever form opened
+    // this picker — Home's inline form, or the Journey Planner results page (which
+    // re-searches straight away, since its shown options would otherwise be stale).
+    const restoredFrom = params.pickingFor === 'from' ? endpoint : params.currentFrom;
+    const restoredTo = params.pickingFor === 'to' ? endpoint : params.currentTo;
+    if (params.returnTo === 'JourneyPlanner') {
+      navigation.navigate('JourneyPlanner', { restoredFrom, restoredTo, autoSearch: !!(restoredFrom && restoredTo) });
+    } else {
+      navigation.navigate('Home', { restoredFrom, restoredTo });
+    }
   }
 
   if (!initialRegion) {

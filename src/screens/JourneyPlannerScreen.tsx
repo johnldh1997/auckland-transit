@@ -8,24 +8,36 @@ import AnimatedPressable from '../components/AnimatedPressable';
 import BackButton from '../components/BackButton';
 import DepartureTimePicker from '../components/DepartureTimePicker';
 import DraggableSheet from '../components/DraggableSheet';
+import LegStopList from '../components/LegStopList';
+import PlaceAutocompleteInput from '../components/PlaceAutocompleteInput';
 import RoutePreviewMap from '../components/RoutePreviewMap';
 import TripRow from '../components/TripRow';
 import { useFavoriteTrips } from '../context/FavoriteTripsContext';
+import { useLegStops } from '../hooks/useLegStops';
 import { useRecentTrips } from '../context/RecentTripsContext';
 import { useSettings } from '../context/SettingsContext';
 import { useThemeColors } from '../context/ThemeContext';
 import { useTranslation } from '../i18n/useTranslation';
 import { getAlertsForRoutes } from '../services/alerts';
 import { loadActiveJourney, saveActiveJourney, clearActiveJourney } from '../services/activeJourney';
-import { getTransitRoutes } from '../services/directions';
+import { decodePolyline, getTransitRoutes } from '../services/directions';
 import { estimateFare, FareEstimate } from '../services/fareZones';
 import { getRouteIdsByShortName } from '../services/gtfs';
 import { getCurrentStepIndex } from '../services/journeyTracking';
 import { startJourneyTracking, stopJourneyTracking, updateJourneyNotification } from '../services/journeyNotification';
 import { getLegColor } from '../services/legColors';
+import { computeLegProgress, LatLon } from '../services/legProgress';
 import { getVehiclesForRoutes } from '../services/liveVehicleMatch';
 import { radius, spacing, ThemeColors } from '../theme';
-import { JourneyEndpoint, JourneyRoute, RootStackParamList, ServiceAlert, TransitStep, VehiclePosition } from '../types';
+import {
+  JourneyEndpoint,
+  JourneyRoute,
+  RootStackParamList,
+  ServiceAlert,
+  Stop,
+  TransitStep,
+  VehiclePosition,
+} from '../types';
 
 // How often to re-check live vehicles on the journey's routes during an active journey —
 // matches the live map's own poll interval.
@@ -128,6 +140,10 @@ export default function JourneyPlannerScreen({ route, navigation }: Props) {
   const [screenState, setScreenState] = useState<ScreenState>('form');
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [currentPosition, setCurrentPosition] = useState<{ latitude: number; longitude: number }>();
+  // Like currentPosition, but only fixes accurate enough to trust for matching a stop (see the
+  // accuracy filter in beginTracking) — what the per-leg stop list highlights against.
+  const [matchedPosition, setMatchedPosition] = useState<LatLon>();
+  const legStops = useLegStops(journeyRoute?.steps);
   const [focusOnUserAt, setFocusOnUserAt] = useState<number>();
   const [focusStepAt, setFocusStepAt] = useState<{ index: number; requestedAt: number }>();
   const [routeAlerts, setRouteAlerts] = useState<ServiceAlert[]>([]);
@@ -144,6 +160,9 @@ export default function JourneyPlannerScreen({ route, navigation }: Props) {
   // rather than wherever the user has actually moved to since. This ref always holds the
   // latest position for it to read instead.
   const currentPositionRef = useRef<{ latitude: number; longitude: number } | undefined>(undefined);
+  // When currentPositionRef was last updated — lets the periodic re-check tell a fresh fix from
+  // one that's gone stale (no signal underground or in a tunnel).
+  const lastFixAtRef = useRef(0);
 
   const { trips: favoriteTrips, isFavoriteTrip, toggleFavoriteTrip } = useFavoriteTrips();
   const { trips: recentTrips, addRecentTrip, removeRecentTrip } = useRecentTrips();
@@ -314,6 +333,16 @@ export default function JourneyPlannerScreen({ route, navigation }: Props) {
     runSearch(from, to);
   }
 
+  // Changing either end re-searches straight away once both are known, so the route options
+  // on screen never describe a trip that no longer matches the From/To shown above them.
+  function handleEndpointChange(which: 'from' | 'to', endpoint: JourneyEndpoint) {
+    const nextFrom = which === 'from' ? endpoint : from;
+    const nextTo = which === 'to' ? endpoint : to;
+    if (which === 'from') setFrom(endpoint);
+    else setTo(endpoint);
+    if (nextFrom && nextTo) runSearch(nextFrom, nextTo);
+  }
+
   function handleRunTrip(tripFrom: JourneyEndpoint, tripTo: JourneyEndpoint) {
     setFrom(tripFrom);
     setTo(tripTo);
@@ -364,6 +393,8 @@ export default function JourneyPlannerScreen({ route, navigation }: Props) {
           return;
         }
         currentPositionRef.current = coords;
+        lastFixAtRef.current = Date.now();
+        setMatchedPosition(coords);
         // Update immediately on every position fix rather than waiting for the interval
         // below — GPS matching is cheap (pure geometry, no network), so there's no
         // reason to delay the highlight up to 15s behind where the user actually is.
@@ -376,6 +407,14 @@ export default function JourneyPlannerScreen({ route, navigation }: Props) {
 
     trackingInterval.current = setInterval(() => {
       setCurrentStepIndex(getCurrentStepIndex(activeRoute.steps, new Date(), currentPositionRef.current));
+      // Also re-checks the get-off alert with no new fix needed: underground or in a tunnel
+      // no fixes arrive at all, and with a stale position the alert falls back to the
+      // scheduled arrival instead of waiting forever for a GPS update that isn't coming.
+      updateJourneyNotification(
+        activeRoute.steps,
+        currentPositionRef.current,
+        Date.now() - lastFixAtRef.current
+      ).catch(() => {});
     }, TRACKING_UPDATE_INTERVAL_MS);
     return true;
   }
@@ -421,6 +460,7 @@ export default function JourneyPlannerScreen({ route, navigation }: Props) {
     setScreenState('form');
     setJourneyRoute(null);
     setCurrentPosition(undefined);
+    setMatchedPosition(undefined);
   }
 
   function handleEndRoute() {
@@ -492,12 +532,14 @@ export default function JourneyPlannerScreen({ route, navigation }: Props) {
             data={journeyRoute.steps}
             keyExtractor={(_, index) => String(index)}
             contentContainerStyle={styles.stepsList}
-            extraData={currentStepIndex}
+            extraData={[currentStepIndex, matchedPosition, legStops]}
             renderItem={({ item, index }) => (
               <StepRow
                 step={item}
                 color={getLegColor(journeyRoute.steps, index, colors)}
                 isCurrent={screenState === 'active' && index === currentStepIndex}
+                stops={legStops.get(index)}
+                position={screenState === 'active' ? matchedPosition : undefined}
                 onPress={() => setFocusStepAt({ index, requestedAt: Date.now() })}
               />
             )}
@@ -516,9 +558,55 @@ export default function JourneyPlannerScreen({ route, navigation }: Props) {
       </View>
       <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
       <View style={styles.form}>
-        {/* From/To are set on Home's own inline search form now, not here — this page just
-            shows results for whatever was picked there, plus a way to change the time and
-            re-search without going back. */}
+        {/* --- Editable Journey Endpoints --- */}
+        <PlaceAutocompleteInput
+          key={from ? `from-${from.label}` : 'from-empty'}
+          placeholder={t('journey.from')}
+          onSelect={(endpoint) => handleEndpointChange('from', endpoint)}
+          onClear={() => setFrom(null)}
+          onChooseOnMap={() =>
+            navigation.navigate('ChooseOnMap', {
+              mode: 'journey',
+              pickingFor: 'from',
+              currentFrom: from ?? undefined,
+              currentTo: to ?? undefined,
+              returnTo: 'JourneyPlanner',
+            })
+          }
+          onOpenFavorites={() =>
+            navigation.navigate('Favorites', {
+              pickingFor: 'from',
+              currentFrom: from ?? undefined,
+              currentTo: to ?? undefined,
+              returnTo: 'JourneyPlanner',
+            })
+          }
+          initialEndpoint={from ?? undefined}
+        />
+        <PlaceAutocompleteInput
+          key={to ? `to-${to.label}` : 'to-empty'}
+          placeholder={t('journey.to')}
+          onSelect={(endpoint) => handleEndpointChange('to', endpoint)}
+          onClear={() => setTo(null)}
+          onChooseOnMap={() =>
+            navigation.navigate('ChooseOnMap', {
+              mode: 'journey',
+              pickingFor: 'to',
+              currentFrom: from ?? undefined,
+              currentTo: to ?? undefined,
+              returnTo: 'JourneyPlanner',
+            })
+          }
+          onOpenFavorites={() =>
+            navigation.navigate('Favorites', {
+              pickingFor: 'to',
+              currentFrom: from ?? undefined,
+              currentTo: to ?? undefined,
+              returnTo: 'JourneyPlanner',
+            })
+          }
+          initialEndpoint={to ?? undefined}
+        />
         <DepartureTimePicker value={departureTime} onChange={setDepartureTime} />
         <AnimatedPressable
           style={[styles.searchButton, (!from || !to) && styles.searchButtonDisabled]}
@@ -609,21 +697,46 @@ function RouteLineBadges({ steps }: { steps: TransitStep[] }) {
   );
 }
 
+// A rider must be within this of a leg's path for the stop list to trust it as "on this leg" —
+// looser than the step-matching threshold, since the leg's path is Google's own polyline and
+// AT's stops sit beside the road rather than on it.
+const STOP_LIST_ON_ROUTE_METERS = 150;
+
 function StepRow({
   step,
   color,
   isCurrent,
+  stops,
+  position,
   onPress,
 }: {
   step: TransitStep;
   color: string;
   isCurrent: boolean;
+  // Every stop this leg passes through, when they could be resolved (see useLegStops).
+  stops?: Stop[];
+  // The rider's live position, only while a journey is active.
+  position?: LatLon;
   onPress: () => void;
 }) {
   const colors = useThemeColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const t = useTranslation();
   const rowStyle = [styles.stepRow, isCurrent && styles.stepRowCurrent];
+  // undefined = follow whether this is the current leg (the current one opens itself, the
+  // others stay folded); once tapped it holds the rider's own choice.
+  const [stopsOpen, setStopsOpen] = useState<boolean | undefined>(undefined);
+  const legPoints = useMemo(
+    () => (step.kind === 'transit' && step.encodedPolyline ? decodePolyline(step.encodedPolyline) : []),
+    [step]
+  );
+  const showStops = step.kind === 'transit' && !!stops && stops.length >= 2;
+  const isOpen = stopsOpen ?? isCurrent;
+  const progress = useMemo(() => {
+    if (!isCurrent || !isOpen || !position || !stops || stops.length < 2) return null;
+    const result = computeLegProgress(legPoints, stops, position);
+    return result && result.offRouteMeters <= STOP_LIST_ON_ROUTE_METERS ? result : null;
+  }, [isCurrent, isOpen, position, stops, legPoints]);
 
   if (step.kind === 'walk') {
     return (
@@ -638,20 +751,31 @@ function StepRow({
   }
 
   return (
-    <Pressable style={rowStyle} onPress={onPress}>
-      <View style={[styles.transitBadge, { backgroundColor: color }]}>
-        <Text style={styles.transitBadgeText} numberOfLines={1}>
-          {step.lineName ?? '?'}
-        </Text>
-      </View>
-      <View style={styles.stepDetails}>
-        <Text style={styles.stepText}>{step.instruction}</Text>
-        <Text style={styles.stepSubtext}>
-          {step.departureTime} → {step.arrivalTime}
-          {step.numStops !== undefined ? ` · ${t('journey.numStops', { count: step.numStops })}` : ''}
-        </Text>
-      </View>
-    </Pressable>
+    <View style={[styles.stepBlock, isCurrent && styles.stepRowCurrent]}>
+      <Pressable style={styles.stepRow} onPress={onPress}>
+        <View style={[styles.transitBadge, { backgroundColor: color }]}>
+          <Text style={styles.transitBadgeText} numberOfLines={1}>
+            {step.lineName ?? '?'}
+          </Text>
+        </View>
+        <View style={styles.stepDetails}>
+          <Text style={styles.stepText}>{step.instruction}</Text>
+          <Text style={styles.stepSubtext}>
+            {step.departureTime} → {step.arrivalTime}
+            {step.numStops !== undefined ? ` · ${t('journey.numStops', { count: step.numStops })}` : ''}
+          </Text>
+        </View>
+      </Pressable>
+      {showStops && stops && (
+        <>
+          <Pressable style={styles.stopsToggle} onPress={() => setStopsOpen(!isOpen)} hitSlop={6}>
+            <Text style={[styles.stopsToggleText, { color }]}>{t('journey.numStops', { count: stops.length - 1 })}</Text>
+            <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={14} color={color} />
+          </Pressable>
+          {isOpen && <LegStopList stops={stops} color={color} headsign={step.headsign} progress={progress} />}
+        </>
+      )}
+    </View>
   );
 }
 
@@ -781,6 +905,18 @@ function createStyles(colors: ThemeColors) {
     borderRadius: radius.sm,
   },
   stepRowCurrent: { backgroundColor: colors.primaryMuted },
+  // Wraps a transit step's row together with its stop list, so the current-leg highlight
+  // covers both rather than just the top row.
+  stepBlock: { borderRadius: radius.sm, paddingBottom: spacing.xs },
+  stopsToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-start',
+    marginLeft: 32 + spacing.sm + spacing.xs,
+    paddingVertical: 2,
+  },
+  stopsToggleText: { fontSize: 12, fontWeight: '700' },
   walkIcon: { fontSize: 20, width: 32, textAlign: 'center' },
   stepDetails: { flex: 1 },
   transitBadge: {

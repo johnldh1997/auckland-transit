@@ -9,7 +9,7 @@ import { useThemeColors } from '../context/ThemeContext';
 import { useTranslation } from '../i18n/useTranslation';
 import { getStopById } from '../services/gtfs';
 import { radius, spacing, ThemeColors } from '../theme';
-import { FavoritePlace, FavoriteStop, RootStackParamList } from '../types';
+import { FavoritePlace, FavoriteStop, JourneyEndpoint, RootStackParamList } from '../types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Favorites'>;
 
@@ -24,7 +24,7 @@ export default function FavoritesScreen({ route, navigation }: Props) {
   const colors = useThemeColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
-  const { pickingFor, currentFrom, currentTo } = route.params ?? {};
+  const { pickingFor, currentFrom, currentTo, returnTo } = route.params ?? {};
   const { favorites, loading: stopsLoading, removeFavorite } = useFavorites();
   const { places, loading: placesLoading, removePlace } = useFavoritePlaces();
   const t = useTranslation();
@@ -51,14 +51,22 @@ export default function FavoritesScreen({ route, navigation }: Props) {
       return;
     }
 
-    // Picking mode: carry the full from+to pair back to Home's inline journey form (the
-    // only place a picker like this is ever opened from), not just the field being picked —
-    // so the other field's in-progress selection isn't lost on the way back.
+    // Picking mode: carry the full from+to pair back to whichever form opened this picker
+    // (Home's inline form, or the Journey Planner results page), not just the field being
+    // picked — so the other field's in-progress selection isn't lost on the way back.
+    function returnEndpoints(restoredFrom: JourneyEndpoint | undefined, restoredTo: JourneyEndpoint | undefined) {
+      if (returnTo === 'JourneyPlanner') {
+        navigation.navigate('JourneyPlanner', { restoredFrom, restoredTo, autoSearch: !!(restoredFrom && restoredTo) });
+      } else {
+        navigation.navigate('Home', { restoredFrom, restoredTo });
+      }
+    }
+
     if (item.kind === 'place') {
-      navigation.navigate('Home', {
-        restoredFrom: pickingFor === 'from' ? item.place.endpoint : currentFrom,
-        restoredTo: pickingFor === 'to' ? item.place.endpoint : currentTo,
-      });
+      returnEndpoints(
+        pickingFor === 'from' ? item.place.endpoint : currentFrom,
+        pickingFor === 'to' ? item.place.endpoint : currentTo
+      );
       return;
     }
 
@@ -69,10 +77,7 @@ export default function FavoritesScreen({ route, navigation }: Props) {
       ? { kind: 'coordinates' as const, lat: resolved.lat, lon: resolved.lon, label: item.stop.stopName }
       : undefined;
     if (!endpoint) return;
-    navigation.navigate('Home', {
-      restoredFrom: pickingFor === 'from' ? endpoint : currentFrom,
-      restoredTo: pickingFor === 'to' ? endpoint : currentTo,
-    });
+    returnEndpoints(pickingFor === 'from' ? endpoint : currentFrom, pickingFor === 'to' ? endpoint : currentTo);
   }
 
   function handleRemove(item: MergedFavorite) {

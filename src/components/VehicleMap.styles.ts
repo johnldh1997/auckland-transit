@@ -17,9 +17,12 @@ export function createStyles(colors: ThemeColors) {
       alignItems: 'center',
       justifyContent: 'center',
       gap: 1,
-      minWidth: 30,
+      // A fixed size (not sized to the route text) so the heading arrowhead around it —
+      // HeadingArrowBadge, which needs this exact size — is placed identically for every vehicle.
+      width: 40,
+      height: 38,
       borderRadius: radius.sm,
-      paddingHorizontal: 4,
+      paddingHorizontal: 2,
       paddingVertical: 3,
       borderWidth: 2,
       borderColor: '#FFFFFF',

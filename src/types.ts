@@ -157,10 +157,17 @@ export type RootStackParamList = {
       }
     | undefined;
   // One combined list of favourite stops + places. pickingFor/currentFrom/currentTo are
-  // only present when opened from Home's inline From/To field to pick an endpoint; absent
-  // when opened from the hamburger menu to just browse/manage favourites.
+  // only present when opened from a From/To field (Home's inline form, or the editable
+  // fields on the Journey Planner results page) to pick an endpoint; absent when opened
+  // from the hamburger menu to just browse/manage favourites. returnTo says which of those
+  // two forms receives the pick — Home when absent.
   Favorites:
-    | { pickingFor: 'from' | 'to'; currentFrom?: JourneyEndpoint; currentTo?: JourneyEndpoint }
+    | {
+        pickingFor: 'from' | 'to';
+        currentFrom?: JourneyEndpoint;
+        currentTo?: JourneyEndpoint;
+        returnTo?: 'Home' | 'JourneyPlanner';
+      }
     | undefined;
   // Current location / choose on map / search a stop, place, or address — the result is
   // added directly to the relevant favourites store and the screen pops back to Favorites.
@@ -183,12 +190,18 @@ export type RootStackParamList = {
         autoSearch?: boolean;
       }
     | undefined;
-  // Three independent uses: picking a From/To endpoint (always returns to Home's own
-  // inline journey form — the only place From/To are editable), picking a location to add
-  // as a favourite (returns to Favorites), or picking a home address (returns to
-  // SetHomeAddress, which then returns to Settings).
+  // Three independent uses: picking a From/To endpoint (returns to whichever form opened
+  // it — Home's inline form, or the Journey Planner results page via returnTo), picking a
+  // location to add as a favourite (returns to Favorites), or picking a home address
+  // (returns to SetHomeAddress, which then returns to Settings).
   ChooseOnMap:
-    | { mode: 'journey'; pickingFor: 'from' | 'to'; currentFrom?: JourneyEndpoint; currentTo?: JourneyEndpoint }
+    | {
+        mode: 'journey';
+        pickingFor: 'from' | 'to';
+        currentFrom?: JourneyEndpoint;
+        currentTo?: JourneyEndpoint;
+        returnTo?: 'Home' | 'JourneyPlanner';
+      }
     | { mode: 'favourite' }
     | { mode: 'home' };
   // Favourite/recent whole From→To trips, promoted out of the Journey Planner form into

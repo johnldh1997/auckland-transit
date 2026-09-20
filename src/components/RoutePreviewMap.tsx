@@ -5,6 +5,7 @@ import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useThemeColors, useThemeScheme } from '../context/ThemeContext';
 import { useTranslation } from '../i18n/useTranslation';
 import { useCountdown } from '../hooks/useCountdown';
+import { useLegStops } from '../hooks/useLegStops';
 import { darkMapStyle, lightMapStyle, MY_LOCATION_ZOOM_DELTA } from '../mapStyle';
 import { decodePolyline } from '../services/directions';
 import { getStopById, getTripHeadsign } from '../services/gtfs';
@@ -12,9 +13,9 @@ import { getLegColor } from '../services/legColors';
 import { getCurrentCoordinates } from '../services/location';
 import { getMarkerIcon } from '../services/markerIcon';
 import { getNextStopForTrip, NextStopInfo } from '../services/realtime';
-import { getStopsAlongLeg } from '../services/routeStops';
 import { radius, spacing } from '../theme';
 import { Stop, TransitStep, VehiclePosition } from '../types';
+import HeadingArrowBadge, { bearingBucket } from './HeadingArrowBadge';
 import LocateButton from './LocateButton';
 import StableMarker from './StableMarker';
 
@@ -38,6 +39,10 @@ const AUCKLAND_CENTER = { latitude: -36.8485, longitude: 174.7633 };
 // native default anchor (bottom-center) would leave it floating above the real coordinate
 // instead of centered on it. A stable module-level reference, same reasoning as VehicleMap.tsx.
 const CENTER_ANCHOR = { x: 0.5, y: 0.5 };
+
+// The live-vehicle badge is a 28px circle (styles.liveVehicleBadge) — its heading arrowhead
+// sits a steady distance off that circle's edge, in the same colour as its ring.
+const LIVE_VEHICLE_BADGE = { width: 28, height: 28, round: true };
 
 interface Props {
   encodedPolyline: string;
@@ -78,29 +83,9 @@ export default function RoutePreviewMap({
   const lastFocusRequestRef = useRef<number | undefined>(undefined);
   const lastStepFocusRequestRef = useRef<number | undefined>(undefined);
   const points = decodePolyline(encodedPolyline);
-  const [legStops, setLegStops] = useState<Map<number, Stop[]>>(new Map());
+  const legStops = useLegStops(steps);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
   const selectedVehicle = liveVehicles.find((v) => v.vehicleId === selectedVehicleId) ?? null;
-
-  useEffect(() => {
-    let cancelled = false;
-    setLegStops(new Map());
-    steps.forEach((step, index) => {
-      if (step.kind !== 'transit') return;
-      getStopsAlongLeg(step)
-        .then((stops) => {
-          if (!cancelled && stops.length > 0) {
-            setLegStops((prev) => new Map(prev).set(index, stops));
-          }
-        })
-        .catch(() => {});
-    });
-    return () => {
-      cancelled = true;
-    };
-    // Only re-resolve when the chosen route itself changes, not on every unrelated re-render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [encodedPolyline]);
 
   useEffect(() => {
     if (points.length > 1) {
@@ -234,11 +219,16 @@ export default function RoutePreviewMap({
               key={vehicle.vehicleId}
               coordinate={{ latitude: vehicle.lat, longitude: vehicle.lon }}
               title={vehicle.routeShortName ?? t('common.vehicle')}
+              // Centered so the heading arrow orbits the vehicle's true position.
+              anchor={CENTER_ANCHOR}
+              snapshotKey={bearingBucket(vehicle.bearing)}
               onPress={() => setSelectedVehicleId((current) => (current === vehicle.vehicleId ? null : vehicle.vehicleId))}
             >
-              <View style={[styles.liveVehicleBadge, { borderColor: color }]}>
-                <MaterialIcons name="directions-bus" size={16} color={color} />
-              </View>
+              <HeadingArrowBadge bearing={vehicle.bearing} arrowColor={color} badge={LIVE_VEHICLE_BADGE}>
+                <View style={[styles.liveVehicleBadge, { borderColor: color }]}>
+                  <MaterialIcons name="directions-bus" size={16} color={color} />
+                </View>
+              </HeadingArrowBadge>
             </StableMarker>
           );
         })}
