@@ -55,9 +55,8 @@ A few problems that took real digging to solve properly, condensed here — the 
 
 - **Mobile only** — no web build; `react-native-maps` doesn't support it, and it was never a goal.
 - **Built and tested on Android only** — the app is configured for iOS too (bundle identifier, permissions, plugins are all in `app.config.js`), but a real iOS build requires a paid Apple Developer Program membership to install on a physical device, which this project hasn't set up. Untested on iOS as a result.
-- **Some routes never show a highlighted path on the map** — this is a gap in what AT publishes (route shape data is optional per the GTFS spec, and not every route includes it), not a bug in the lookup logic. Explained in-app on the About screen.
+- **Route highlights, per-leg stop lists and scheduled departures depend on a bundled timetable snapshot.** AT re-issues its trip IDs whenever it publishes a new schedule, so the snapshot can fall out of step with the live feed well before its stated end date. This bit for real: a check of every live vehicle against the bundled database found only 35% of their trips (so only 35% could show a route), until it was rebuilt from a fresh feed (100%). Rebuilding is `scripts/build-gtfs-db.py` on AT's current `gtfs.zip` — worth repeating whenever AT publishes a new feed. The hamburger menu warns when the feed is close to expiring, but that date alone doesn't catch this drift.
 - **Fare estimates are approximate**, not official pricing — see above.
-- **The bundled schedule database goes stale** after a few months (AT's static feed is versioned) and needs a fresh download + rebuild; the app surfaces a staleness warning on the About screen so this isn't a silent failure.
 - **No automated test suite** — correctness was verified through real-API testing (with live keys, not mocks) and manual device testing throughout development, not unit/integration tests.
 
 ## Getting started
