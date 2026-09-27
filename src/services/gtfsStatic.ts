@@ -238,10 +238,17 @@ interface TripStopRow {
 // back out of the bundled database. Best-effort, like getShapeForTrip above — a route
 // with an unmatched trip (a timing edge case, or a > 10 min schedule/live drift) simply
 // returns no stops rather than guessing.
+//
+// departureStopIds/arrivalStopIds are every AT stop within match range of Google's own
+// board/alight coordinate, not just one — a through-station (e.g. Glen Innes, where the
+// Eastern Line's two directions meet) has a separate stop_id per platform, often only
+// metres apart, so picking a single nearest one before even knowing which trip it is can
+// silently pick the wrong platform. Checking a trip's sequence against the whole candidate
+// set instead means whichever platform that specific trip actually uses is still found.
 export async function getStopsForTransitStep(
   routeShortName: string,
-  departureStopId: string,
-  arrivalStopId: string,
+  departureStopIds: string[],
+  arrivalStopIds: string[],
   departureTimestamp: string
 ): Promise<string[]> {
   const db = await getDb();
@@ -258,17 +265,23 @@ export async function getStopsForTransitStep(
   if (routeRows.length === 0) return [];
   const routeIds = routeRows.map((r) => r.id);
 
-  const [departureStopRow, arrivalStopRow] = await Promise.all([
-    db.getFirstAsync<{ id: number }>('SELECT id FROM stops WHERE stop_id = ?', [departureStopId]),
-    db.getFirstAsync<{ id: number }>('SELECT id FROM stops WHERE stop_id = ?', [arrivalStopId]),
+  async function resolveInternalIds(stopIds: string[]): Promise<number[]> {
+    const placeholders = stopIds.map(() => '?').join(',');
+    const rows = await db.getAllAsync<{ id: number }>(`SELECT id FROM stops WHERE stop_id IN (${placeholders})`, stopIds);
+    return rows.map((r) => r.id);
+  }
+  const [departureStopIntIds, arrivalStopIntIds] = await Promise.all([
+    resolveInternalIds(departureStopIds),
+    resolveInternalIds(arrivalStopIds),
   ]);
-  if (!departureStopRow || !arrivalStopRow) return [];
+  if (departureStopIntIds.length === 0 || arrivalStopIntIds.length === 0) return [];
+  const arrivalStopIntIdSet = new Set(arrivalStopIntIds);
 
   const midnight = new Date(departureDate);
   midnight.setHours(0, 0, 0, 0);
   const targetSeconds = Math.round((departureDate.getTime() - midnight.getTime()) / 1000);
   const routePlaceholders = routeIds.map(() => '?').join(',');
-  const departureStopIntId = departureStopRow.id;
+  const departurePlaceholders = departureStopIntIds.map(() => '?').join(',');
 
   async function findCandidateTrips(serviceIds: number[], secondsOffset: number) {
     if (serviceIds.length === 0) return [];
@@ -276,11 +289,11 @@ export async function getStopsForTransitStep(
     const target = targetSeconds - secondsOffset;
     return db.getAllAsync<{ trip_id: number }>(
       `SELECT d.trip_id FROM departures d
-       WHERE d.stop_id = ? AND d.route_id IN (${routePlaceholders}) AND d.service_id IN (${servicePlaceholders})
+       WHERE d.stop_id IN (${departurePlaceholders}) AND d.route_id IN (${routePlaceholders}) AND d.service_id IN (${servicePlaceholders})
          AND ABS(d.departure_seconds - ?) <= ?
        ORDER BY ABS(d.departure_seconds - ?) ASC
        LIMIT 5`,
-      [departureStopIntId, ...routeIds, ...serviceIds, target, TRIP_MATCH_TOLERANCE_SECONDS, target]
+      [...departureStopIntIds, ...routeIds, ...serviceIds, target, TRIP_MATCH_TOLERANCE_SECONDS, target]
     );
   }
 
@@ -299,8 +312,8 @@ export async function getStopsForTransitStep(
        WHERE d.trip_id = ? ORDER BY d.departure_seconds ASC`,
       [candidate.trip_id]
     );
-    const departureIndex = rows.findIndex((r) => r.int_stop_id === departureStopRow.id);
-    const arrivalIndex = rows.findIndex((r) => r.int_stop_id === arrivalStopRow.id);
+    const departureIndex = rows.findIndex((r) => departureStopIntIds.includes(r.int_stop_id));
+    const arrivalIndex = rows.findIndex((r) => arrivalStopIntIdSet.has(r.int_stop_id));
     if (departureIndex !== -1 && arrivalIndex !== -1 && arrivalIndex > departureIndex) {
       return rows.slice(departureIndex, arrivalIndex + 1).map((r) => r.stop_id);
     }

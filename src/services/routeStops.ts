@@ -7,10 +7,17 @@ import { getStopsForTransitStep } from './gtfsStatic';
 // rather than silently picking the wrong stop.
 const MAX_STOP_MATCH_DISTANCE_METERS = 100;
 
-async function findMatchingStop(location: { lat: number; lon: number }): Promise<Stop | undefined> {
-  const [nearest] = await getStopsNearLocation(location.lat, location.lon, 1);
-  if (!nearest || nearest.distanceMeters > MAX_STOP_MATCH_DISTANCE_METERS) return undefined;
-  return nearest;
+// A through-station on the rail network (anywhere two directions of the same line meet,
+// e.g. Glen Innes on the Eastern Line) has a separate stop_id per platform/direction, often
+// only metres apart — closer together than the match tolerance itself. Picking only the
+// single nearest one is a coin flip between the two platforms, and reported live as a train
+// leg (the E-W line via Glen Innes) resolving zero stops: the picked platform simply wasn't
+// the one this specific trip's own stop sequence used. Returning every stop within range
+// instead lets getStopsForTransitStep pick whichever candidate is actually on the matched
+// trip, rather than committing to one guess before the trip itself is even known.
+async function findMatchingStops(location: { lat: number; lon: number }): Promise<Stop[]> {
+  const nearby = await getStopsNearLocation(location.lat, location.lon, 5);
+  return nearby.filter((stop) => stop.distanceMeters <= MAX_STOP_MATCH_DISTANCE_METERS);
 }
 
 // A leg's stops only depend on the leg itself (line, board/alight points, departure time) and
@@ -51,13 +58,18 @@ async function resolveStopsAlongLeg(step: TransitStep): Promise<Stop[]> {
     return [];
   }
 
-  const [departureStop, arrivalStop] = await Promise.all([
-    findMatchingStop(step.departureStop),
-    findMatchingStop(step.arrivalStop),
+  const [departureStops, arrivalStops] = await Promise.all([
+    findMatchingStops(step.departureStop),
+    findMatchingStops(step.arrivalStop),
   ]);
-  if (!departureStop || !arrivalStop) return [];
+  if (departureStops.length === 0 || arrivalStops.length === 0) return [];
 
-  const stopIds = await getStopsForTransitStep(step.lineName, departureStop.id, arrivalStop.id, step.departureTimestamp);
+  const stopIds = await getStopsForTransitStep(
+    step.lineName,
+    departureStops.map((stop) => stop.id),
+    arrivalStops.map((stop) => stop.id),
+    step.departureTimestamp
+  );
   if (stopIds.length === 0) return [];
 
   const stops = await Promise.all(stopIds.map((id) => getStopById(id)));
