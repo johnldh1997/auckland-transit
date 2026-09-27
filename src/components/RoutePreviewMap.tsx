@@ -1,6 +1,6 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ImageURISource, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useThemeColors, useThemeScheme } from '../context/ThemeContext';
 import { useTranslation } from '../i18n/useTranslation';
@@ -11,10 +11,10 @@ import { decodePolyline } from '../services/directions';
 import { getStopById, getTripHeadsign } from '../services/gtfs';
 import { getLegColor } from '../services/legColors';
 import { getCurrentCoordinates } from '../services/location';
-import { getMarkerIcon } from '../services/markerIcon';
+import { MODE_ICON } from '../services/markerIcon';
 import { getNextStopForTrip, NextStopInfo } from '../services/realtime';
 import { radius, spacing } from '../theme';
-import { Stop, TransitStep, VehiclePosition } from '../types';
+import { Stop, TransitStep, TransportMode, VehiclePosition } from '../types';
 import HeadingArrowBadge, { bearingBucket } from './HeadingArrowBadge';
 import LocateButton from './LocateButton';
 import StableMarker from './StableMarker';
@@ -143,37 +143,22 @@ export default function RoutePreviewMap({
   // component gets from the parent's 15s live-vehicle poll (see the identical reasoning
   // for stopMarkers in VehicleMap.tsx).
   const legStopMarkers = useMemo(() => {
-    const markers: { key: string; stop: Stop; coordinate: { latitude: number; longitude: number }; color: string }[] = [];
+    const markers: {
+      key: string;
+      stop: Stop;
+      coordinate: { latitude: number; longitude: number };
+      color: string;
+      mode: TransportMode;
+    }[] = [];
     legStops.forEach((stopsForLeg, index) => {
       const color = getLegColor(steps, index, colors);
+      const mode = steps[index]?.mode ?? 'bus';
       stopsForLeg.forEach((stop) => {
-        markers.push({ key: `${index}-${stop.id}`, stop, coordinate: { latitude: stop.lat, longitude: stop.lon }, color });
+        markers.push({ key: `${index}-${stop.id}`, stop, coordinate: { latitude: stop.lat, longitude: stop.lon }, color, mode });
       });
     });
     return markers;
   }, [legStops, steps, colors]);
-
-  // One rasterized bus-icon bitmap per distinct leg color, resolved via `getMarkerIcon`
-  // (see markerIcon.ts for why this avoids the red-pin snapshot race) — legs can each have
-  // their own color, unlike VehicleMap.tsx's single-color stop markers.
-  const [legIcons, setLegIcons] = useState<Record<string, ImageURISource>>({});
-  useEffect(() => {
-    let cancelled = false;
-    const uniqueColors = Array.from(new Set(legStopMarkers.map((m) => m.color)));
-    Promise.all(
-      uniqueColors.map((color) => getMarkerIcon('directions-bus', 16, color).then((icon) => [color, icon] as const))
-    ).then((entries) => {
-      if (cancelled) return;
-      const next: Record<string, ImageURISource> = {};
-      entries.forEach(([color, icon]) => {
-        if (icon) next[color] = icon;
-      });
-      setLegIcons(next);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [legStopMarkers]);
 
   return (
     <View style={styles.container}>
@@ -200,15 +185,14 @@ export default function RoutePreviewMap({
             />
           );
         })}
-        {legStopMarkers.map(({ key, stop, coordinate, color }) => (
-          <Marker
-            key={key}
-            coordinate={coordinate}
-            image={legIcons[color]}
-            pinColor={color}
-            anchor={CENTER_ANCHOR}
-            title={stop.name}
-          />
+        {/* zIndex keeps stops above the route polylines (a separate overlay layer, always
+            beneath markers) but below the live vehicles rendered after them. */}
+        {legStopMarkers.map(({ key, stop, coordinate, color, mode }) => (
+          <StableMarker key={key} coordinate={coordinate} anchor={CENTER_ANCHOR} zIndex={1} title={stop.name}>
+            <View style={[styles.stopBadge, { borderColor: color }]}>
+              <MaterialIcons name={MODE_ICON[mode]} size={11} color={color} />
+            </View>
+          </StableMarker>
         ))}
         {start && <Marker coordinate={start} pinColor={colors.success} title={t('map.start')} />}
         {end && <Marker coordinate={end} pinColor={colors.danger} title={t('map.destination')} />}
@@ -221,6 +205,7 @@ export default function RoutePreviewMap({
               title={vehicle.routeShortName ?? t('common.vehicle')}
               // Centered so the heading arrow orbits the vehicle's true position.
               anchor={CENTER_ANCHOR}
+              zIndex={2}
               snapshotKey={bearingBucket(vehicle.bearing)}
               onPress={() => setSelectedVehicleId((current) => (current === vehicle.vehicleId ? null : vehicle.vehicleId))}
             >
@@ -338,6 +323,17 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: '#FFFFFF',
     borderWidth: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // A stop's own marker: a small hollow-looking badge (white fill, coloured ring) so it
+  // reads as quieter than a vehicle's bigger badge even before either one moves.
+  stopBadge: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
   },

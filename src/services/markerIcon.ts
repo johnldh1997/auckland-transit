@@ -1,8 +1,18 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
 import { ImageURISource } from 'react-native';
+import { TransportMode } from '../types';
 
 type IconName = React.ComponentProps<typeof MaterialIcons>['name'];
+
+// Shared by every map that draws mode-specific markers (vehicles, stop badges), so a train
+// always gets the same glyph wherever it's drawn.
+export const MODE_ICON: Record<TransportMode, IconName> = {
+  bus: 'directions-bus',
+  train: 'train',
+  ferry: 'directions-boat',
+  unknown: 'help-outline',
+};
 
 const cache = new Map<string, Promise<ImageURISource | null>>();
 

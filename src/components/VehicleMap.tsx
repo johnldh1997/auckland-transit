@@ -1,31 +1,24 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
-import MapView, { Marker, Polyline, Region } from 'react-native-maps';
+import MapView, { Polyline, Region } from 'react-native-maps';
 import { useCountdown } from '../hooks/useCountdown';
 import { getStopById, getStopsInBounds, getTripHeadsign } from '../services/gtfs';
 import { getShapeForTrip } from '../services/gtfsStatic';
 import { getCurrentCoordinates, getFastCoordinates } from '../services/location';
 import { getNextStopForTrip, NextStopInfo } from '../services/realtime';
-import { useMarkerIcon } from '../services/markerIcon';
+import { MODE_ICON } from '../services/markerIcon';
 import { getVehiclePositions } from '../services/vehicles';
 import { useSettings } from '../context/SettingsContext';
 import { useThemeColors, useThemeScheme } from '../context/ThemeContext';
 import { useTranslation } from '../i18n/useTranslation';
 import { darkMapStyle, lightMapStyle, MY_LOCATION_ZOOM_DELTA } from '../mapStyle';
 import { spacing } from '../theme';
-import { Stop, TransportMode, VehiclePosition } from '../types';
+import { Stop, VehiclePosition } from '../types';
 import HeadingArrowBadge, { bearingBucket } from './HeadingArrowBadge';
 import LocateButton from './LocateButton';
 import StableMarker from './StableMarker';
 import { createStyles } from './VehicleMap.styles';
-
-const MODE_ICON: Record<TransportMode, React.ComponentProps<typeof MaterialIcons>['name']> = {
-  bus: 'directions-bus',
-  train: 'train',
-  ferry: 'directions-boat',
-  unknown: 'help-outline',
-};
 
 // AT's realtime feed itself updates roughly every 30s server-side; polling at 15s just
 // picks those updates up sooner on average without hammering the weekly request quota.
@@ -148,7 +141,6 @@ export default function VehicleMap({ onStopPress, bottomInset = 0, onSelectedVeh
     }),
     [colors]
   );
-  const stopIcon = useMarkerIcon('directions-bus', 18, colors.primary);
   const mapRef = useRef<MapView>(null);
   // A non-null mapRef only means React has assigned the ref — react-native-maps' native map
   // (especially on Android) can still be mid-initialization at that point, and calling
@@ -472,15 +464,21 @@ export default function VehicleMap({ onStopPress, bottomInset = 0, onSelectedVeh
         toolbarEnabled={false}
         customMapStyle={isDark ? darkMapStyle : lightMapStyle}
       >
+        {/* zIndex keeps stops above the route polyline (a separate overlay layer, always
+            beneath markers) but below live vehicles, so a vehicle passing over a stop stays
+            the thing on top. */}
         {stopMarkers.map(({ stop, coordinate }) => (
-          <Marker
+          <StableMarker
             key={`stop-${stop.id}`}
             coordinate={coordinate}
-            image={stopIcon}
-            pinColor={colors.primary}
             anchor={CENTER_ANCHOR}
+            zIndex={1}
             onPress={() => handleStopPress(stop, coordinate)}
-          />
+          >
+            <View style={[styles.stopBadge, { borderColor: colors.primary }]}>
+              <MaterialIcons name={MODE_ICON.bus} size={11} color={colors.primary} />
+            </View>
+          </StableMarker>
         ))}
         {/* Always mounted, coordinates just swap to EMPTY_SHAPE when deselected — unmounting
             this on every deselect used to leave the route stuck drawn on the native map. */}
@@ -496,6 +494,7 @@ export default function VehicleMap({ onStopPress, bottomInset = 0, onSelectedVeh
             // Centered (not the default bottom-center) so the heading arrow orbits the
             // vehicle's true position rather than a point above it.
             anchor={CENTER_ANCHOR}
+            zIndex={2}
             snapshotKey={bearingBucket(v.bearing)}
             onPress={() => handleVehiclePress(v)}
           >

@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useMemo } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useThemeColors } from '../context/ThemeContext';
 import { useTranslation } from '../i18n/useTranslation';
 import { LegProgress } from '../services/legProgress';
@@ -28,7 +28,11 @@ export default function LegStopList({ stops, color, headsign, progress }: Props)
   const styles = useMemo(() => createStyles(colors), [colors]);
   const t = useTranslation();
   const lastIndex = stops.length - 1;
-  const firstShown = progress && progress.currentIndex > 0 ? progress.currentIndex : 0;
+  const passedCount = progress && progress.currentIndex > 0 ? progress.currentIndex : 0;
+  // Passed stops start folded behind the "N stops passed" line — tapping it reveals them
+  // rather than losing them, since a rider may want to check a stop they already went through.
+  const [passedOpen, setPassedOpen] = useState(false);
+  const firstShown = passedOpen ? 0 : passedCount;
 
   return (
     <View style={styles.list}>
@@ -38,7 +42,12 @@ export default function LegStopList({ stops, color, headsign, progress }: Props)
           <Text style={[styles.towardsText, { color }]}>{t('common.towards', { headsign })}</Text>
         </View>
       )}
-      {firstShown > 0 && <Text style={styles.passedText}>{t('journey.stopsPassed', { count: firstShown })}</Text>}
+      {passedCount > 0 && (
+        <Pressable style={styles.passedRow} onPress={() => setPassedOpen((open) => !open)} hitSlop={6}>
+          <Text style={styles.passedText}>{t('journey.stopsPassed', { count: passedCount })}</Text>
+          <Ionicons name={passedOpen ? 'chevron-up' : 'chevron-down'} size={13} color={colors.textMuted} />
+        </Pressable>
+      )}
       {stops.slice(firstShown).map((stop, offset) => {
         const index = firstShown + offset;
         const isFirst = index === 0;
@@ -97,7 +106,8 @@ function createStyles(colors: ThemeColors) {
     list: { marginTop: spacing.xs, paddingBottom: spacing.xs },
     towardsRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingVertical: spacing.xs },
     towardsText: { fontSize: 12, fontWeight: '700' },
-    passedText: { color: colors.textMuted, fontSize: 11, paddingVertical: 2, paddingLeft: 30 },
+    passedRow: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 4, paddingLeft: 30 },
+    passedText: { color: colors.textMuted, fontSize: 11 },
     row: {
       flexDirection: 'row',
       alignItems: 'center',
