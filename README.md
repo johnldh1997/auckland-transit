@@ -7,9 +7,9 @@ Built against Auckland Transport's public GTFS + GTFS-Realtime APIs and Google's
 ## Screenshots
 
 <p float="left">
-  <img src="images/journey-planner.jpg" width="32%" alt="Journey planner with live bus stops shown on the map" />
+  <img src="images/live-map.jpg" width="32%" alt="Live map with heading-direction vehicle badges and bordered stop markers" />
   <img src="images/route-options.jpg" width="32%" alt="Route options with travel times, transfers, and walking distance" />
-  <img src="images/route-preview.jpg" width="32%" alt="Turn-by-turn route preview with an estimated AT HOP fare" />
+  <img src="images/stop-list.jpg" width="32%" alt="Route preview with the full per-leg stop list expanded" />
 </p>
 
 ## Why I built this
